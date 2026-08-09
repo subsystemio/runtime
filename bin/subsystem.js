@@ -119,6 +119,7 @@ async function main(cfg) {
       roomKey: roomKey(cfg.room || config.room), // optional: privacy, never authority
       storeDir: path.join(appDir, '.identity'),
       receiptFile: path.join(appDir, '.receipt'),
+      uiPort: port,
       log: (m) => console.log('[link]', m)
     })
     link.open()
