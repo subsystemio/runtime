@@ -18,11 +18,14 @@ const { command, flag, arg, summary, header, footer, bail } = require('paparam')
 // subsystem-media and reboot" work with no code change and no controller.
 const MEDIA = /\.(jpe?g|png|webp|gif|svg|mp4|webm|ogv|mp3|woff2)$/i
 
+// Dotfiles are never content. A card edited on a Mac gains AppleDouble sidecars — `._puzzle.jpg`
+// beside `puzzle.jpg` — and those match MEDIA, sort first, and match an app's name preference just
+// as well, so discovery would hand the app 4KB of resource fork instead of the portrait.
 function listMedia(dir) {
   try {
     return fs
       .readdirSync(dir)
-      .filter((n) => MEDIA.test(n))
+      .filter((n) => n[0] !== '.' && MEDIA.test(n))
       .sort()
       .map((n) => '/media/' + n)
   } catch {
