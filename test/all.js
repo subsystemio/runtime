@@ -13,7 +13,8 @@ test('every protocol message round-trips', function (t) {
     stateReport: { state: '{"count":3}', ts: 1770000000 },
     commandResult: { id: 7, ok: false, result: '"nope"' },
     command: { id: 7, name: 'bump', args: '{}' },
-    capability: { proof: b4a.alloc(32, 9) }
+    capability: { proof: b4a.alloc(32, 9) },
+    fleetOperator: { key: b4a.alloc(32, 3), role: 'pending', online: true }
   }
 
   for (const [name, value] of Object.entries(messages)) {
