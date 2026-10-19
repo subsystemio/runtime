@@ -132,3 +132,116 @@ test('an older attestation is refused once a newer one has been seen', async fun
     'a newer proof still passes an older receipt'
   )
 })
+
+// ── downloads ───────────────────────────────────────────────────────────────
+
+const http = require('bare-http1')
+const fs = require('bare-fs')
+const os = require('bare-os')
+const path = require('bare-path')
+const { download } = require('../lib/download.js')
+const { UIHost } = require('../lib/ui-host.js')
+
+// A real server, so redirects, headers and streaming are the real thing rather than a mock's idea
+// of them.
+async function serve(t, routes) {
+  const hits = {}
+  const server = http.createServer((req, res) => {
+    const url = req.url.split('?')[0]
+    hits[url] = (hits[url] || 0) + 1
+    const r = routes[url]
+    if (!r) {
+      res.writeHead(404)
+      return res.end()
+    }
+    if (r.redirect) {
+      res.writeHead(302, { Location: r.redirect })
+      return res.end()
+    }
+    res.writeHead(200, { 'Content-Type': r.type }) // bare-http1 sets Content-Length from end()
+    res.end(r.body)
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.teardown(() => new Promise((resolve) => server.close(resolve)))
+  return { base: 'http://127.0.0.1:' + server.address().port, hits }
+}
+
+function tmp() {
+  const dir = path.join(
+    os.tmpdir(),
+    'dl-test-' + Date.now() + '-' + Math.floor(Math.random() * 1e6)
+  )
+  fs.mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+test('a download lands whole, reports progress, and is never fetched twice', async function (t) {
+  const body = b4a.alloc(300 * 1024, 7)
+  const { base, hits } = await serve(t, { '/reel.mp4': { type: 'video/mp4', body } })
+  const dir = tmp()
+  const seen = []
+
+  const name = await download(base + '/reel.mp4', dir, { onProgress: (p) => seen.push(p) })
+  t.ok(/^dl-[0-9a-f]{16}\.mp4$/.test(name), 'named by the URL, keeping the extension')
+  t.alike(fs.readFileSync(path.join(dir, name)), body, 'every byte arrived')
+  t.alike(
+    seen[seen.length - 1],
+    { received: body.byteLength, total: body.byteLength },
+    'ends at 100%'
+  )
+  t.absent(
+    fs.readdirSync(dir).some((n) => n.endsWith('.part')),
+    'no .part left behind'
+  )
+
+  t.is(await download(base + '/reel.mp4', dir), name, 'same URL, same file')
+  t.is(hits['/reel.mp4'], 2, 'the second call only asked; it did not save again')
+  t.is(fs.readdirSync(dir).length, 1)
+})
+
+test('a link with no extension takes one from its content type, through a redirect', async function (t) {
+  const body = b4a.from('fake jpeg')
+  const { base } = await serve(t, {
+    '/share': { redirect: '/file' },
+    '/file': { type: 'image/jpeg; charset=binary', body }
+  })
+  const name = await download(base + '/share', tmp())
+  t.ok(name.endsWith('.jpg'), name)
+})
+
+test('a failed or unservable download leaves nothing behind', async function (t) {
+  const { base } = await serve(t, { '/notes.txt': { type: 'text/plain', body: b4a.from('hi') } })
+  const dir = tmp()
+  await t.exception(download(base + '/missing.mp4', dir), /HTTP 404/)
+  await t.exception(download(base + '/notes.txt', dir), /not a media file/)
+  await t.exception(download('file:///etc/passwd', dir), /not an http/)
+  t.is(fs.readdirSync(dir).length, 0)
+})
+
+test('the UI host serves downloads under /media/, but the card wins a name', async function (t) {
+  const assets = tmp()
+  const downloads = tmp()
+  fs.writeFileSync(path.join(downloads, 'dl-abc.jpg'), 'downloaded')
+  fs.writeFileSync(path.join(downloads, 'same.jpg'), 'downloaded')
+  fs.writeFileSync(path.join(assets, 'same.jpg'), 'from the card')
+  fs.writeFileSync(path.join(downloads, 'dl-abc.jpg.part'), 'half')
+
+  const ui = new UIHost({ port: 0, assets, downloads })
+  await ui.start()
+  t.teardown(() => ui.stop())
+  const base = 'http://127.0.0.1:' + ui.server.address().port
+  const get = (p) =>
+    new Promise((resolve) => {
+      http.get(base + p, (res) => {
+        const chunks = []
+        res.on('data', (c) => chunks.push(c))
+        res.on('end', () =>
+          resolve({ status: res.statusCode, body: b4a.toString(b4a.concat(chunks)) })
+        )
+      })
+    })
+
+  t.alike(await get('/media/dl-abc.jpg'), { status: 200, body: 'downloaded' })
+  t.alike(await get('/media/same.jpg'), { status: 200, body: 'from the card' })
+  t.is((await get('/media/dl-abc.jpg.part')).status, 404, 'a half-written file is never served')
+})

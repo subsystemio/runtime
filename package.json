@@ -27,6 +27,7 @@
   "license": "MIT",
   "dependencies": {
     "b4a": "^1.8.1",
+    "bare-fetch": "^3.4.1",
     "bare-fs": "^4.7.2",
     "bare-http1": "^4.5.7",
     "bare-path": "^3.0.0",

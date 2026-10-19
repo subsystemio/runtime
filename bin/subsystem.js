@@ -4,6 +4,7 @@ const path = require('bare-path')
 const b4a = require('b4a')
 const { UIHost } = require('../lib/ui-host.js')
 const { IPC } = require('../lib/ipc.js')
+const { download } = require('../lib/download.js')
 const { roomKey } = require('../lib/room.js')
 const { command, flag, arg, summary, header, footer, bail } = require('paparam')
 
@@ -54,6 +55,21 @@ function readConfig(dir) {
   return out
 }
 
+function readJSON(file) {
+  try {
+    return JSON.parse(b4a.toString(fs.readFileSync(file), 'utf8'))
+  } catch {
+    return {}
+  }
+}
+
+// Written beside and renamed over, so a power cut leaves the old state or the new, never half.
+function writeJSON(file, obj) {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file + '.tmp', JSON.stringify(obj))
+  fs.renameSync(file + '.tmp', file)
+}
+
 // Which MCP this subsystem answers to, and optionally which private room. Both come off the card
 // via config.txt; flags win, so a dev can point one at a local MCP without editing anything.
 //
@@ -70,11 +86,13 @@ function identityKey(cfg, config) {
 }
 
 async function main(cfg) {
-  const { appDir, host, port, assets, resetAfter } = cfg
-  const ui = new UIHost({ host, port, assets, log: (m) => console.log('[ui]', m) })
+  const { appDir, host, port, assets, store, resetAfter } = cfg
+  const downloads = path.join(store, 'media')
+  const ui = new UIHost({ host, port, assets, downloads, log: (m) => console.log('[ui]', m) })
   await ui.start()
 
-  const media = listMedia(assets)
+  // The card's own art first, so an app's defaults still come from what someone put on the card.
+  const media = listMedia(assets).concat(listMedia(downloads))
   const config = readConfig(assets)
   console.log(
     '[subsystem] media from ' +
@@ -85,7 +103,16 @@ async function main(cfg) {
   const keys = Object.keys(config)
   if (keys.length) console.log('[subsystem] config: ' + keys.join(', '))
 
-  const ipc = new IPC(ui, { media, config, log: (m) => console.log('[app]', m) })
+  const savedFile = path.join(store, 'saved.json')
+  const ipc = new IPC(ui, {
+    media,
+    config,
+    saved: readJSON(savedFile),
+    download: async (url, onProgress) =>
+      '/media/' + (await download(url, downloads, { onProgress })),
+    save: (obj) => writeJSON(savedFile, obj),
+    log: (m) => console.log('[app]', m)
+  })
 
   let resetTimer = null
   if (resetAfter) {
@@ -151,6 +178,7 @@ const cli = command(
   flag('--port [port]', 'HTTP port for the display (default 9080)'),
   flag('--host [host]', 'interface to bind (default 127.0.0.1)'),
   flag('--assets [dir]', 'where media and config.txt live (default <appDir>/media)'),
+  flag('--store [dir]', 'where downloads and saved state live (default <appDir>/.store)'),
   flag('--reset-after [seconds]', 'reset this long after the app reports complete; 0 disables'),
   flag('--mcp [64-hex]', 'public key of the MCP to answer to; overrides config.txt'),
   flag('--room [secret]', 'room secret, if the fleet is private'),
@@ -171,6 +199,9 @@ const cli = command(
       // On a Pi this points at the FAT boot partition, so the art is editable by plugging the card
       // into a laptop. Locally it is just the app's own media dir.
       assets: cmd.flags.assets || path.join(appDir, 'media'),
+      // Not the FAT partition: it is small, and a power cut mid-write is kinder to the rootfs. On a
+      // Pi this lands under /opt, which a reinstalled payload unpacks over without touching.
+      store: cmd.flags.store || path.join(appDir, '.store'),
       resetAfter: Number(cmd.flags.resetAfter || 0),
       mcp: cmd.flags.mcp,
       room: cmd.flags.room
