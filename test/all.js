@@ -14,7 +14,8 @@ test('every protocol message round-trips', function (t) {
     commandResult: { id: 7, ok: false, result: '"nope"' },
     command: { id: 7, name: 'bump', args: '{}' },
     capability: { proof: b4a.alloc(32, 9) },
-    fleetOperator: { key: b4a.alloc(32, 3), role: 'pending', online: true }
+    fleetOperator: { key: b4a.alloc(32, 3), role: 'pending', online: true },
+    fleetRole: { key: b4a.alloc(32, 4), role: 'user' }
   }
 
   for (const [name, value] of Object.entries(messages)) {
